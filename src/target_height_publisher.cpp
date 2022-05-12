@@ -150,7 +150,7 @@ void TargetHeightPublisher::targetCallback(const safe_footstep_planner::OnlineFo
 
 
         //int tmp = threshold/0.01;//heighmapの１ピクセルは1cm
-        int tmp = 8;
+        int tmp = 6;
         for (int x = (int)(next_front(0)) + 1 - tmp*3/2; x < (int)(next_front(0)) + 1 + tmp*3/2; x++) {
           for (int y = (int)(next_front(1)) + 1 - tmp; y < (int)(next_front(1)) + 1 + tmp; y++) {
             next_az_front += cloud_->points[x+y*cloud_->width].z;
