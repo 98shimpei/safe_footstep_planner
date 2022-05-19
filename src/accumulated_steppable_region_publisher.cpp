@@ -1,16 +1,9 @@
 #include <ros/ros.h>
 #include <std_msgs/Header.h>
-#include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/Image.h>
 #include <jsk_recognition_msgs/PolygonArray.h>
 #include <geometry_msgs/PointStamped.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl/conversions.h>
-#include <pcl/PointIndices.h>
-#include <pcl/segmentation/sac_segmentation.h>
 #include <tf/transform_listener.h>
-#include <jsk_recognition_utils/pcl_conversion_util.h>
 #include <jsk_recognition_utils/geo_util.h>
 #include <safe_footstep_planner/OnlineFootStep.h>
 #include <safe_footstep_planner/SteppableRegion.h>
@@ -37,33 +30,27 @@ private:
   ros::NodeHandle pnh_;
   safe_footstep_planner::PolygonArray combined_meshes_;
   ros::Subscriber target_sub_;
-  ros::Subscriber pointcloud_sub_;
   ros::Subscriber heightmap_sub_;
   ros::Subscriber heightmap_config_sub_;
   ros::Publisher region_publisher_;
   ros::Publisher visualized_region_publisher_;
   ros::Publisher combined_mesh_publisher_;
-  ros::Publisher image_publisher_;
-  ros::Publisher accumulated_image_publisher_;
+  ros::Publisher steppable_image_publisher_;
+  ros::Publisher height_image_publisher_;
+  ros::Publisher pose_image_publisher_;
   ros::Publisher polygon_publisher_;
   ros::Publisher height_publisher_;
   ros::Publisher landing_pose_publisher_;
   tf::TransformListener listener_;
   void polygonarrayCallback(const jsk_recognition_msgs::PolygonArray::ConstPtr& msg);
   void targetCallback(const safe_footstep_planner::OnlineFootStep::ConstPtr& msg);
-  void pointcloudCallback(const sensor_msgs::PointCloud2ConstPtr& input);
   void heightmapCallback(const sensor_msgs::ImageConstPtr& msg);
   void heightmapConfigCallback(const jsk_recognition_msgs::HeightmapConfigConstPtr& msg);
   cv::Mat median_image_;
-  cv::Mat median_image2_;
   cv::Mat accumulated_steppable_image;
   cv::Mat accumulated_height_image;
   cv::Mat accumulated_pose_image;
   cv::Mat accumulated_yaw_image;
-  float x_x_diff;
-  float x_y_diff;
-  float y_x_diff;
-  float y_y_diff;
   float cur_foot_pos_z;
   float grid_length;
   int steppable_range;
@@ -95,22 +82,16 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   region_publisher_ = nh_.advertise<safe_footstep_planner::SteppableRegion>("steppable_region", 1);
   visualized_region_publisher_ = nh_.advertise<jsk_recognition_msgs::PolygonArray>("visualized_steppable_region", 1);
   combined_mesh_publisher_ = nh_.advertise<safe_footstep_planner::PolygonArray>("combined_meshed_polygons", 1);
-  image_publisher_ = nh_.advertise<sensor_msgs::Image> ("output", 1);
-  accumulated_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("accumulated_output", 1);
+  steppable_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("steppable_image_output", 1);
+  height_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("height_image_output", 1);
+  pose_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("pose_image_output", 1);
   polygon_publisher_ = nh_.advertise<jsk_recognition_msgs::PolygonArray> ("output_polygon", 1);
   height_publisher_ = nh_.advertise<safe_footstep_planner::OnlineFootStep>("landing_height", 1);
   landing_pose_publisher_ = nh_.advertise<visualization_msgs::Marker>("landing_pose_marker", 1);
   target_sub_ = nh_.subscribe("landing_target", 1, &SteppableRegionPublisher::targetCallback, this);
-  //pointcloud_sub_ = nh_.subscribe("rt_accumulated_heightmap_pointcloud_odomrelative/output", 1, &SteppableRegionPublisher::pointcloudCallback, this);
-  //pointcloud_sub_ = nh_.subscribe("rt_current_heightmap_pointcloud/output", 1, &SteppableRegionPublisher::pointcloudCallback, this);
   heightmap_sub_ = nh_.subscribe("rt_current_heightmap/output", 1, &SteppableRegionPublisher::heightmapCallback, this);
   heightmap_config_sub_ = nh_.subscribe("rt_current_heightmap/output/config", 1, &SteppableRegionPublisher::heightmapConfigCallback, this);
   median_image_ = cv::Mat::zeros(500, 300, CV_32FC1);
-  median_image2_ = cv::Mat::zeros(500, 500, CV_32FC3);
-  x_x_diff = 0;
-  x_y_diff = 0;
-  y_x_diff = 0;
-  y_y_diff = 0;
   cur_foot_pos_z = 0;
   pnh_.getParam("grid_length", grid_length);
   pnh_.getParam("steppable_range", steppable_range);
@@ -162,6 +143,7 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
     tf::transformTFToEigen(transform, camera_transform);
 
   } catch (tf::TransformException ex) {
+    std::cout << "error" << std::endl;
     ROS_ERROR("%s", ex.what());
     return;
   }
@@ -169,6 +151,8 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   cv_bridge::CvImagePtr cv_ptr;
   cv::Mat input_image = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_32FC2)->image;  
   cv::medianBlur(input_image, median_image_, 5);
+  cv::Mat current_height_image = cv::Mat::zeros(median_image_.rows, median_image_.cols, CV_32FC1);
+  cv::medianBlur(median_image_, current_height_image, 5);
 
   cv::Mat binarized_image = cv::Mat::zeros(median_image_.rows, median_image_.cols, CV_8UC1);
   cv::Mat current_pose_image = cv::Mat::zeros(median_image_.rows, median_image_.cols, CV_32FC3);
@@ -276,8 +260,8 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
 
   ros::Time b_time = ros::Time::now();
 
-  std::vector<int> x_list = {-steppable_range, (int)(-steppable_range/2), 0, (int)(steppable_range/2), steppable_range};
-  std::vector<int> y_list = {-steppable_range, (int)(-steppable_range/2), 0, (int)(steppable_range/2), steppable_range};
+  std::vector<int> x_list = {-steppable_range, (int)(-steppable_range*1/2), 0, (int)(steppable_range*1/2), steppable_range};
+  std::vector<int> y_list = {-steppable_range, (int)(-steppable_range*1/2), 0, (int)(steppable_range*1/2), steppable_range};
 
   for (int x = (int)(obstacle_edge_range); x < (median_image_.cols-(int)(obstacle_edge_range)); x+=2) {
     for (int y = (int)(obstacle_edge_range); y < (median_image_.rows-(int)(obstacle_edge_range)); y+=2) {
@@ -376,12 +360,13 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   ec = ec * std::abs(camera_transform(2, 3) / ec[2]) * 100 - Eigen::Vector3f(heightmap_minx, heightmap_miny, 0);
   ed = ed * std::abs(camera_transform(2, 3) / ed[2]) * 100 - Eigen::Vector3f(heightmap_minx, heightmap_miny, 0);
 
-  float tmp_yaw = center_transform.rotation().eulerAngles(0, 1, 2)[2];
+  Eigen::Vector3f tmp_vec = center_transform.rotation() * Eigen::Vector3f::UnitX();
+  float tmp_yaw = std::atan2(tmp_vec[1], tmp_vec[0]);
   for (int x = std::max(0, (int)(ea[0])); x < std::min((int)(ec[0]), binarized_image.cols); x++) {
     for (int y = std::max(0, (int)(ea[1] + (eb[1]-ea[1])*(x-ea[0])/(eb[0]-ea[0]))); y < std::min((int)(ed[1] + (ec[1]-ed[1])*(x-ed[0])/(ec[0]-ed[0])), binarized_image.rows); y++) {
       accumulated_steppable_image.at<uchar>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = binarized_image.at<uchar>(y, x);
-      if (median_image_.at<cv::Vec2f>(y, x)[0] > -1e+10) {
-        accumulated_height_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = median_image_.at<cv::Vec2f>(y, x)[0];
+      if (current_height_image.at<cv::Vec2f>(y, x)[0] > -1e+10) {
+        accumulated_height_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = current_height_image.at<cv::Vec2f>(y, x)[0];
       }
       if (current_pose_image.at<cv::Vec3f>(y, x)[0] > -1e+10) {
         accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[0] = current_pose_image.at<cv::Vec3f>(y, x)[0];
@@ -491,16 +476,38 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   cv::flip(eroded_image, eroded_image, 0);
   //cv::flip(image, image, 0);
   //image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", image).toImageMsg());
-  image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "mono8", eroded_image).toImageMsg());
+  steppable_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "mono8", eroded_image).toImageMsg());
 
-  cv::Mat output_image = cv::Mat::zeros(accumulated_height_image.cols, accumulated_height_image.rows, CV_8UC1);
+  cv::Mat output_height_image = cv::Mat::zeros(accumulated_height_image.cols, accumulated_height_image.rows, CV_8UC3);
+  cv::Mat output_pose_image = cv::Mat::zeros(accumulated_height_image.cols, accumulated_height_image.rows, CV_8UC3);
+  float th1 = -0.1, th2 = 0.1, th3 = 0.3, th4 = 0.5;
   for (int y = 0; y < accumulated_height_image.cols; y++) {
     for (int x = 0; x < accumulated_height_image.cols; x++) {
-      output_image.at<uchar>(y, x) = (int)(accumulated_height_image.at<float>(y, x) * 600 + 30);
+      float tmp = accumulated_height_image.at<float>(y, x);
+      if (tmp < th1 || tmp > th4) {
+        output_height_image.at<cv::Vec3b>(y, x)[0] = 0;
+        output_height_image.at<cv::Vec3b>(y, x)[1] = 0;
+        output_height_image.at<cv::Vec3b>(y, x)[2] = 0;
+      } else if (tmp < th2) {
+        output_height_image.at<cv::Vec3b>(y, x)[0] = (int)((tmp-th1)*250/0.5);
+        output_height_image.at<cv::Vec3b>(y, x)[1] = (int)((th2-tmp)*250/0.5);
+        output_height_image.at<cv::Vec3b>(y, x)[2] = 0;
+      } else if (tmp < th3) {
+        output_height_image.at<cv::Vec3b>(y, x)[0] = (int)((th3-tmp)*250/0.5);
+        output_height_image.at<cv::Vec3b>(y, x)[1] = 0;
+        output_height_image.at<cv::Vec3b>(y, x)[2] = (int)((tmp-th2)*250/0.5);
+      } else {
+        output_height_image.at<cv::Vec3b>(y, x)[0] = 0;
+        output_height_image.at<cv::Vec3b>(y, x)[1] = (int)((tmp-th3)*250/0.5);
+        output_height_image.at<cv::Vec3b>(y, x)[2] = (int)((th4-tmp)*250/0.5);
+      }
+      output_pose_image.at<cv::Vec3b>(y, x)[0] = std::min(255, std::max(0, (int)(accumulated_pose_image.at<cv::Vec3f>(y, x)[0]*700)+125));
+      output_pose_image.at<cv::Vec3b>(y, x)[1] = std::min(255, std::max(0, (int)(accumulated_pose_image.at<cv::Vec3f>(y, x)[1]*700)+125));
+      output_pose_image.at<cv::Vec3b>(y, x)[2] = 125;
     }
   }
-  accumulated_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "mono8", output_image).toImageMsg());
-  //accumulated_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "mono8", output_accumulated_steppable_image).toImageMsg());
+  height_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", output_height_image).toImageMsg());
+  pose_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", output_pose_image).toImageMsg());
 
   ros::Time f_time = ros::Time::now();
 
@@ -615,14 +622,14 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   combined_mesh_publisher_.publish(combined_meshes_);
 
   ros::Time end_time = ros::Time::now();
-  std::cout << "all_time " << (end_time - begin_time).sec << "s " << (int)((end_time - begin_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "begin_a  " << (a_time - begin_time).sec << "s " << (int)((a_time - begin_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "a_b  " << (b_time - a_time).sec << "s " << (int)((b_time - a_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "b_c  " << (c_time - b_time).sec << "s " << (int)((c_time - b_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "c_d  " << (d_time - c_time).sec << "s " << (int)((d_time - c_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "d_e  " << (e_time - d_time).sec << "s " << (int)((e_time - d_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "e_f  " << (f_time - e_time).sec << "s " << (int)((f_time - e_time).nsec / 1000000) << "ms" << std::endl;
-  std::cout << "f_end  " << (end_time - f_time).sec << "s " << (int)((end_time - f_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "all_time " << (end_time - begin_time).sec << "s " << (int)((end_time - begin_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "begin_a  " << (a_time - begin_time).sec << "s " << (int)((a_time - begin_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "a_b  " << (b_time - a_time).sec << "s " << (int)((b_time - a_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "b_c  " << (c_time - b_time).sec << "s " << (int)((c_time - b_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "c_d  " << (d_time - c_time).sec << "s " << (int)((d_time - c_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "d_e  " << (e_time - d_time).sec << "s " << (int)((e_time - d_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "e_f  " << (f_time - e_time).sec << "s " << (int)((f_time - e_time).nsec / 1000000) << "ms" << std::endl;
+  //std::cout << "f_end  " << (end_time - f_time).sec << "s " << (int)((end_time - f_time).nsec / 1000000) << "ms" << std::endl;
 
 }
 
@@ -697,7 +704,6 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
   } else {
     return;
   }
-  next_foot_pos[2] = std::abs(next_foot_pos[2]) < 0.4 ? next_foot_pos[2] : 0;
 
   safe_footstep_planner::OnlineFootStep ps;
   ps.header = msg->header;
@@ -707,8 +713,9 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
     accumulated_pose_image.at<cv::Vec3f>((int)(next_tmp[1]*100), (int)(next_tmp[0]*100))[0],
     accumulated_pose_image.at<cv::Vec3f>((int)(next_tmp[1]*100), (int)(next_tmp[0]*100))[1],
     accumulated_pose_image.at<cv::Vec3f>((int)(next_tmp[1]*100), (int)(next_tmp[0]*100))[2]);
-  tmp_pose = cur_foot_rot.transpose() * Eigen::AngleAxisf(-accumulated_yaw_image.at<float>((int)(next_tmp[1]*100), (int)(next_tmp[0]*100)), Eigen::Vector3f::UnitZ()) * tmp_pose;
-  //tmp_pose = cur_foot_rot.transpose() * tmp_pose;
+  //tmp_pose = cur_foot_rot.transpose() * Eigen::AngleAxisf(accumulated_yaw_image.at<float>((int)(next_tmp[1]*100), (int)(next_tmp[0]*100)), Eigen::Vector3f::UnitZ()) * tmp_pose;
+  tmp_pose = Eigen::AngleAxisf(accumulated_yaw_image.at<float>((int)(next_tmp[1]*100), (int)(next_tmp[0]*100)), Eigen::Vector3f::UnitZ()) * tmp_pose;
+  tmp_pose = cur_foot_rot.transpose() * tmp_pose;
   if (0.5 < tmp_pose.norm() && tmp_pose.norm() < 1.5) {
     ps.nx =  tmp_pose[0];
     ps.ny =  tmp_pose[1];
@@ -719,6 +726,7 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
 
   Eigen::Vector3f tmp_pos;
   tmp_pos = cur_foot_rot.transpose() * (next_foot_pos - cur_foot_pos);
+  tmp_pos[2] = std::abs(tmp_pos[2]) < 0.4 ? tmp_pos[2] : 0;
   ps.x = tmp_pos(0);
   ps.y = tmp_pos(1);
   ps.z = tmp_pos(2);
@@ -758,459 +766,6 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
   pose_msg.pose.orientation.w = 1.0;
 
   landing_pose_publisher_.publish(pose_msg);
-}
-
-void SteppableRegionPublisher::pointcloudCallback(const sensor_msgs::PointCloud2ConstPtr& input)
-{
-
-  ros::Time begin_time = ros::Time::now();
-  // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  //pcl::PointCloud<pcl::Normal> cloud;
-  pcl::fromROSMsg (*input, *cloud);
-
-  //std::cout << "height,width: " << input->height << " " << input->width << std::endl;
-
-  //fill infinite point
-  //heightとwidthの順番確認してない!!!
-  x_x_diff = 0;
-  x_y_diff = 0;
-  for (int y = 0; y < input->height; y++) {
-    for (int x = 1; x < input->width; x++) {
-      if (pcl::isFinite(cloud->points[y*input->width+x])) {
-        if (x_x_diff == 0 && pcl::isFinite(cloud->points[y*input->width+x-1])) { //連続してFiniteな部分を探し、diffを計算
-          x_x_diff = cloud->points[y*input->width+x].x - cloud->points[y*input->width+x-1].x;
-          x_y_diff = cloud->points[y*input->width+x].y - cloud->points[y*input->width+x-1].y;
-        }
-      } else {
-        //std::cout << "nan value: " << j << " " << i << " " << cloud->points[i*500+j].x << " " << cloud->points[i*500+j].y << " " << cloud->points[i*500+j].z << std::endl;
-        if (x_x_diff != 0 && pcl::isFinite(cloud->points[y*input->width+x-1])) { //inFiniteな部分には隣のzをコピー
-          cloud->points[y*input->width+x].x = cloud->points[y*input->width+x-1].x + x_x_diff;
-          cloud->points[y*input->width+x].y = cloud->points[y*input->width+x-1].y + x_y_diff;
-          cloud->points[y*input->width+x].z = cloud->points[y*input->width+x-1].z;
-        }
-      }
-    }
-  }
-  for (int i = input->height-1; i >= 0; i--) {//逆順
-    for (int j = input->width-2; j >= 0; j--) {
-      if ((!pcl::isFinite(cloud->points[i*input->width+j])) && pcl::isFinite(cloud->points[i*input->width+j+1])) { //inFiniteな部分には隣のzをコピー
-        cloud->points[i*input->width+j].x = cloud->points[i*input->width+j+1].x - x_x_diff;
-        cloud->points[i*input->width+j].y = cloud->points[i*input->width+j+1].y - x_y_diff;
-        cloud->points[i*input->width+j].z = cloud->points[i*input->width+j+1].z;
-      }
-    }
-  }
-  y_x_diff = 0;
-  y_y_diff = 0;
-  for (int i = 1; i < input->height; i++) {
-    for (int j = 0; j < input->width; j++) {
-      if (pcl::isFinite(cloud->points[i*input->width+j])) {
-        if (y_x_diff == 0 && pcl::isFinite(cloud->points[(i-1)*input->width+j])) { //連続してFiniteな部分を探し、diffを計算
-          y_x_diff = cloud->points[i*input->width+j].x - cloud->points[(i-1)*input->width+j].x;
-          y_y_diff = cloud->points[i*input->width+j].y - cloud->points[(i-1)*input->width+j].y;
-        }
-      } else {
-        if (y_x_diff != 0 && pcl::isFinite(cloud->points[(i-1)*input->width+j])) { //inFiniteな部分には隣のzをコピー
-          cloud->points[i*input->width+j].x = cloud->points[(i-1)*input->width+j].x + y_x_diff;
-          cloud->points[i*input->width+j].y = cloud->points[(i-1)*input->width+j].y + y_y_diff;
-          cloud->points[i*input->width+j].z = cloud->points[(i-1)*input->width+j].z;
-        }
-      }
-    }
-  }
-  for (int i = input->height-2; i >= 0; i--) {//逆順
-    for (int j = input->width-1; j >= 0; j--) {
-      if ((!pcl::isFinite(cloud->points[i*input->width+j])) && pcl::isFinite(cloud->points[(i+1)*input->width+j])) { //inFiniteな部分には隣のzをコピー
-        cloud->points[i*input->width+j].x = cloud->points[(i+1)*input->width+j].x - y_x_diff;
-        cloud->points[i*input->width+j].y = cloud->points[(i+1)*input->width+j].y - y_y_diff;
-        cloud->points[i*input->width+j].z = cloud->points[(i+1)*input->width+j].z;
-      }
-    }
-  }
-
-  ros::Time a_time = ros::Time::now();
-
-  median_image_ = cv::Mat::zeros(input->height, input->width, CV_32FC3);
-  median_image2_ = cv::Mat::zeros(input->height, input->width, CV_32FC3);
-
-  //compress image size by a facter of four
-  for (int y = 0; y < input->height; y++) {
-    for (int x = 0; x < input->width; x++) {
-      if (!pcl::isFinite(cloud->points[y*input->width+x])) {
-        std::cout << "infinite aruyo " << x << " " << y << std::endl;
-      } else {
-        median_image_.at<cv::Vec3f>(y, x)[0] = cloud->points[y*input->width+x].x;
-        median_image_.at<cv::Vec3f>(y, x)[1] = cloud->points[y*input->width+x].y;
-        median_image_.at<cv::Vec3f>(y, x)[2] = cloud->points[y*input->width+x].z;
-      }
-    }
-  }
-
-  ros::Time b_time = ros::Time::now();
-
-  cv::medianBlur(median_image_, median_image_, 5); //中央値を取る(x,y座標は3x3の中心になってしまう)
-  cv::medianBlur(median_image_, median_image2_, 5); //中央値を取る(x,y座標は3x3の中心になってしまう)
-  //cv::blur(median_image_, median_image_, cv::Size(3, 3));
-  //cv::dilate(median_image_, median_image_, cv::Mat(), cv::Point(-1, -1), 1);
-
-  ros::Time c_time = ros::Time::now();
-
-  cv::Mat binarized_image = cv::Mat::zeros(median_image_.cols, median_image_.rows, CV_8UC1);
-  cv::Mat image = cv::Mat::zeros(median_image_.cols, median_image_.rows, CV_8UC3);
-  float steppable_terrain_edge_height = steppable_range*grid_length*0.01*std::tan(steppable_terrain_angle);
-  float steppable_terrain_corner_height = steppable_terrain_edge_height*std::sqrt(2);//0.33
-  float steppable_slope_edge_height = steppable_range*grid_length*0.01*std::tan(steppable_slope_angle);
-  float steppable_slope_corner_height = steppable_slope_edge_height*std::sqrt(2);//0.33
-  int obstacle_edge_range = (int)(obstacle_range/grid_length);//[cm]/[cm] 18
-  int obstacle_corner_range = (int)(obstacle_edge_range/std::sqrt(2));//[cm]/[cm]
-
-  float front = 0;
-  float right = 0;
-  float left = 0;
-  float back = 0;
-  float center = 0;
-  bool front_flag = 0;
-  bool right_flag = 0;
-  bool left_flag = 0;
-  bool back_flag= 0;
-
-  for (int x = (int)(obstacle_edge_range); x < (median_image_.cols-(int)(obstacle_edge_range)); x++) {
-    for (int y = (int)(obstacle_edge_range); y < (median_image_.rows-(int)(obstacle_edge_range)); y++) {
-      if (std::abs(median_image_.at<cv::Vec3f>(y, x)[2] - cur_foot_pos_z) > height_limit) {
-        continue;
-      }
-      front = (median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2] + median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2]) / 2.0;
-      front_flag = true;
-      if (front + steppable_terrain_edge_height < median_image_.at<cv::Vec3f>(y-steppable_range, x)[2]) {
-        front = median_image_.at<cv::Vec3f>(y-steppable_range, x)[2];
-        front_flag = false;
-      }
-      right = (median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2] + median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2]) / 2.0;
-      right_flag = true;
-      if (right + steppable_terrain_edge_height < median_image_.at<cv::Vec3f>(y, x+steppable_range)[2]) {
-        right = median_image_.at<cv::Vec3f>(y, x+steppable_range)[2];
-        right_flag = false;
-      }
-      left = (median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2] + median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2]) / 2.0;
-      left_flag = true;
-      if (left + steppable_terrain_edge_height < median_image_.at<cv::Vec3f>(y, x-steppable_range)[2]) {
-        left = median_image_.at<cv::Vec3f>(y, x-steppable_range)[2];
-        left_flag = false;
-      }
-      back = (median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2] + median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2]) / 2.0;
-      back_flag = true;
-      if (back + steppable_terrain_edge_height < median_image_.at<cv::Vec3f>(y+steppable_range, x)[2]) {
-        back = median_image_.at<cv::Vec3f>(y+steppable_range, x)[2];
-        back_flag = false;
-      }
-
-      //凸性
-      if (std::abs(front + back - right - left) > steppable_terrain_edge_height*2) {
-        continue;
-      }
-      center = (front + back + right + left) / 4.0;
-      if (center + steppable_terrain_edge_height < median_image_.at<cv::Vec3f>(y, x)[2]) {
-        continue;
-      }
-
-      //ひねり
-      if (front_flag && std::abs(median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2] + right - left) > steppable_terrain_edge_height) {
-        continue;
-      }
-      if (right_flag && std::abs(median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2] + back - front) > steppable_terrain_edge_height) {
-        continue;
-      }
-      if (left_flag && std::abs(median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2] - median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2] + back - front) > steppable_terrain_edge_height) {
-        continue;
-      }
-      if (back_flag && std::abs(median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2] - median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2] + right - left) > steppable_terrain_edge_height) {
-        continue;
-      }
-
-      //傾き
-      if (std::abs(front - back) > steppable_slope_edge_height*2) {
-        continue;
-      }
-      if (std::abs(right - left) > steppable_slope_edge_height*2) {
-        continue;
-      }
-
-
-      //凸性の判断
-      //if (
-      //  2*(center[2] - median_image_.at<cv::Vec3f>(y, x-steppable_range)[2]) - (median_image_.at<cv::Vec3f>(y, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y, x-steppable_range)[2]) > steppable_edge_height ||
-      //  2*(center[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x)[2]) - (median_image_.at<cv::Vec3f>(y+steppable_range, x)[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x)[2]) > steppable_edge_height ||
-      //  2*(center[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2]) - (median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2]) > steppable_corner_height ||
-      //  2*(center[2] - median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2]) - (median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2]) > steppable_corner_height ||
-      //  std::abs(median_image_.at<cv::Vec3f>(y, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y, x-steppable_range)[2]) > 2*steppable_edge_height ||
-      //  std::abs(median_image_.at<cv::Vec3f>(y+steppable_range, x)[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x)[2]) > 2*steppable_edge_height ||
-      //  std::abs(median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2]) > 2*steppable_corner_height ||
-      //  std::abs(median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2] - median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2]) > 2*steppable_corner_height) {
-      //  continue;
-      //}
-
-      image.at<cv::Vec3b>(y, x)[0] = 100;
-      image.at<cv::Vec3b>(y, x)[1] = 100;
-      image.at<cv::Vec3b>(y, x)[2] = 100;
-
-      //double center_height = std::max({
-      //  median_image_.at<cv::Vec3f>(y-steppable_range, x-steppable_range)[2],
-      //  median_image_.at<cv::Vec3f>(y-steppable_range, x)[2],
-      //  median_image_.at<cv::Vec3f>(y-steppable_range, x+steppable_range)[2],
-      //  median_image_.at<cv::Vec3f>(y, x-steppable_range)[2],
-      //  median_image_.at<cv::Vec3f>(y, x)[2],
-      //  median_image_.at<cv::Vec3f>(y, x+steppable_range)[2],
-      //  median_image_.at<cv::Vec3f>(y+steppable_range, x-steppable_range)[2],
-      //  median_image_.at<cv::Vec3f>(y+steppable_range, x)[2],
-      //  median_image_.at<cv::Vec3f>(y+steppable_range, x+steppable_range)[2]
-      //  });
-
-      //if (
-      //  median_image_.at<cv::Vec3f>(y+(int)(steppable_around_edge_range), x)[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y, x+(int)(steppable_around_edge_range))[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y-(int)(steppable_around_edge_range), x)[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y, x-(int)(steppable_around_edge_range))[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y+(int)(steppable_around_corner_range), x+(int)(steppable_around_corner_range))[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y+(int)(steppable_around_corner_range), x-(int)(steppable_around_corner_range))[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y-(int)(steppable_around_corner_range), x+(int)(steppable_around_corner_range))[2] - center[2] > steppable_around_height_diff ||
-      //  median_image_.at<cv::Vec3f>(y-(int)(steppable_around_corner_range), x-(int)(steppable_around_corner_range))[2] - center[2] > steppable_around_height_diff) {
-      //  continue;
-      //}
-      if (
-        median_image_.at<cv::Vec3f>(y+obstacle_edge_range, x)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y, x+obstacle_edge_range)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y-obstacle_edge_range, x)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y, x-obstacle_edge_range)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y+obstacle_corner_range, x+obstacle_corner_range)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y+obstacle_corner_range, x-obstacle_corner_range)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y-obstacle_corner_range, x+obstacle_corner_range)[2] - center > obstacle_height ||
-        median_image_.at<cv::Vec3f>(y-obstacle_corner_range, x-obstacle_corner_range)[2] - center > obstacle_height) {
-        continue;
-      }
-      binarized_image.at<uchar>(y, x) = 255;
-      image.at<cv::Vec3b>(y, x)[0] = 200;
-      image.at<cv::Vec3b>(y, x)[1] = 200;
-      image.at<cv::Vec3b>(y, x)[2] = 200;
-    }
-  }
-
-  ros::Time d_time = ros::Time::now();
-
-  std::vector<std::vector<cv::Point>> approx_vector;
-  std::list<TPPLPoly> polys, result;
-
-  cv::morphologyEx(binarized_image, binarized_image, CV_MOP_CLOSE, cv::noArray(), cv::Point(-1, -1), 2);
-  cv::morphologyEx(binarized_image, binarized_image, CV_MOP_OPEN,  cv::noArray(), cv::Point(-1, -1), 1);
-  cv::erode(binarized_image, binarized_image, cv::noArray(), cv::Point(-1, -1), erode_range);//3
-  cv::morphologyEx(binarized_image, binarized_image, CV_MOP_OPEN, cv::noArray(), cv::Point(-1, -1), 1);
-  std::vector<std::vector<cv::Point>> contours;
-  std::vector<cv::Vec4i> hierarchy;
-  cv::findContours(binarized_image, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_NONE);
-
-  ros::Time e_time = ros::Time::now();
-
-  int size_threshold = 5;
-  for (int j = 0; j < contours.size(); j++) {
-    if (hierarchy[j][3] == -1) { //外側
-      if (cv::contourArea(contours[j]) > size_threshold) {
-        std::vector<cv::Point> approx;
-        cv::approxPolyDP(contours[j], approx, 0.9, true);//1.5
-        if (approx.size() >= 3) {
-          approx_vector.push_back(approx);
-          TPPLPoly poly;
-          poly.Init(approx.size());
-          for (int k = 0; k < approx.size(); k++) {
-            poly[k].x = approx[k].x;
-            poly[k].y = -approx[k].y;
-          }
-          polys.push_back(poly);
-        }
-      }
-    } else { //穴
-      if (cv::contourArea(contours[j]) > size_threshold) {
-        std::vector<cv::Point> approx;
-        cv::approxPolyDP(contours[j], approx, 1.0, true);
-        if (approx.size() >= 3) {
-          approx_vector.push_back(approx);
-          TPPLPoly poly;
-          poly.Init(approx.size());
-          for (int k = 0; k < approx.size(); k++) {
-            poly[k].x = approx[k].x;
-            poly[k].y = -approx[k].y;
-          }
-          poly.SetHole(true);
-          polys.push_back(poly);
-        }
-      }
-    }
-  }
-
-  TPPLPartition pp;
-  pp.Triangulate_EC(&polys, &result);
-
-  cv::drawContours(image, approx_vector, -1, cv::Scalar(255, 0, 0));
-  ros::Time f_time = ros::Time::now();
-
-  jsk_recognition_msgs::PolygonArray polygon_msg;
-  polygon_msg.header = std_msgs::Header();
-  polygon_msg.header.frame_id = input->header.frame_id;
-  safe_footstep_planner::PolygonArray meshed_polygons_msg;
-
-  int i;
-  std::list<TPPLPoly>::iterator iter;
-  for (iter = result.begin(), i = 0; iter != result.end(); iter++, i++) {
-    geometry_msgs::PolygonStamped ps;
-    //for (int j = 0; j < iter->GetNumPoints(); j++) {
-    for (int j = iter->GetNumPoints() - 1; j >= 0; j--) {
-      image.at<cv::Vec3b>(-iter->GetPoint(j).y, iter->GetPoint(j).x)[2] = 255;
-      int p1 = input->width * (-iter->GetPoint(j).y) + (iter->GetPoint(j).x);
-      if (pcl::isFinite(cloud->points[p1])) {
-        geometry_msgs::Point32 p;
-        p.x = median_image2_.at<cv::Vec3f>(-iter->GetPoint(j).y, iter->GetPoint(j).x)[0];
-        p.y = median_image2_.at<cv::Vec3f>(-iter->GetPoint(j).y, iter->GetPoint(j).x)[1];
-        p.z = median_image2_.at<cv::Vec3f>(-iter->GetPoint(j).y, iter->GetPoint(j).x)[2];
-        //p.x = cloud->points[p1].x;
-        //p.y = cloud->points[p1].y;
-        //p.z = 0;
-        ps.polygon.points.push_back(p);
-      } else {
-        std::cout << "infinite!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1111i " << std::endl;
-      }
-    }
-    ps.header = std_msgs::Header();
-    ps.header.frame_id = input->header.frame_id;
-    polygon_msg.polygons.push_back(ps);
-    meshed_polygons_msg.polygons.push_back(ps.polygon);
-  }
-
-  polygon_publisher_.publish(polygon_msg);
-  //meshed_polygons_pub.publish(meshed_polygons_msg);
-  //image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", image).toImageMsg());
-
-  ros::Time end_time = ros::Time::now();
-  //std::cout << "all_time " << (end_time - begin_time).sec << "s " << (int)((end_time - begin_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "begin_a  " << (a_time - begin_time).sec << "s " << (int)((a_time - begin_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "a_b  " << (b_time - a_time).sec << "s " << (int)((b_time - a_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "b_c  " << (c_time - b_time).sec << "s " << (int)((c_time - b_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "c_d  " << (d_time - c_time).sec << "s " << (int)((d_time - c_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "d_e  " << (e_time - d_time).sec << "s " << (int)((e_time - d_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "e_f  " << (f_time - e_time).sec << "s " << (int)((f_time - e_time).nsec / 1000000) << "ms" << std::endl;
-  //std::cout << "f_end  " << (end_time - f_time).sec << "s " << (int)((end_time - f_time).nsec / 1000000) << "ms" << std::endl;
-
-  //std::cout << x_x_diff << " " << x_y_diff << " " << y_x_diff << " " << y_y_diff << std::endl;
-
-
-
-
-  std::vector<std::vector<Eigen::Vector3f> > meshes;
-  std::vector<std::vector<Eigen::Vector3f> > combined_meshes;
-  std::vector<std::vector<size_t> > combined_indices;
-
-  // convert to Eigen::Vector3f
-  size_t mesh_num(meshed_polygons_msg.polygons.size());
-  meshes.resize(mesh_num);
-  // std::cerr << "mesh_num : " << mesh_num << std::endl;
-  std::vector<bool> is_combined(mesh_num, false);
-  for (size_t i = 0; i < mesh_num; i++) {
-    size_t vs_num(meshed_polygons_msg.polygons[i].points.size()); // must be 3 (triangle)
-    meshes[i].resize(vs_num);
-    for (size_t j = 0; j < vs_num; j++) {
-      safe_footstep_util::pointsToEigen(meshed_polygons_msg.polygons[i].points[j], meshes[i][j]);
-    }
-  }
-
-  // debug
-  // size_t mesh_num(4);
-  // std::vector<bool> is_combined(mesh_num, false);
-  // meshes.resize(mesh_num);
-  // // meshes[0].push_back(Eigen::Vector3f(0, 0, 0));
-  // // meshes[0].push_back(Eigen::Vector3f(500, 0, 0));
-  // // meshes[0].push_back(Eigen::Vector3f(700, 500, 0));
-  // // meshes[1].push_back(Eigen::Vector3f(400, 800, 0));
-  // // meshes[1].push_back(Eigen::Vector3f(700, 500, 0));
-  // // meshes[1].push_back(Eigen::Vector3f(1000, 700, 0));
-  // // meshes[2].push_back(Eigen::Vector3f(700, 500, 0));
-  // // meshes[2].push_back(Eigen::Vector3f(400, 800, 0));
-  // // meshes[2].push_back(Eigen::Vector3f(0, 0, 0));
-  // // meshes[3].push_back(Eigen::Vector3f(1000, 700, 0));
-  // // meshes[3].push_back(Eigen::Vector3f(650, 850, 0));
-  // // meshes[3].push_back(Eigen::Vector3f(400, 800, 0));
-  // meshes[0].push_back(Eigen::Vector3f(-0.5, -1, 0));
-  // meshes[0].push_back(Eigen::Vector3f(-0.5, 1, 0));
-  // meshes[0].push_back(Eigen::Vector3f(0.5, 1, 0));
-  // meshes[1].push_back(Eigen::Vector3f(-0.5, -1, 0));
-  // meshes[1].push_back(Eigen::Vector3f(0.5, 1, 0));
-  // meshes[1].push_back(Eigen::Vector3f(0.5, -1, 0));
-  // meshes[2].push_back(Eigen::Vector3f(0.7, -1.3, 0));
-  // meshes[2].push_back(Eigen::Vector3f(0.7, 1.3, 0));
-  // meshes[2].push_back(Eigen::Vector3f(1.7, 1.3, 0));
-  // meshes[3].push_back(Eigen::Vector3f(0.7, -1.3, 0));
-  // meshes[3].push_back(Eigen::Vector3f(1.7, 1.3, 0));
-  // meshes[3].push_back(Eigen::Vector3f(1.7, -1.3, 0));
-
-  // combine meshes
-  for (size_t i = 0; i < meshes.size(); i++) {
-    std::vector<size_t> is_combined_indices;
-    is_combined_indices.push_back(i);
-    for (size_t j = i + 1; j < meshes.size(); j++) {
-      std::vector<Eigen::Vector3f> inter_v;
-      std::vector<Eigen::Vector3f> v1 = meshes[i], v2 = meshes[j];
-      std::sort(v1.begin(), v1.end(), safe_footstep_util::compare_eigen3f);
-      std::sort(v2.begin(), v2.end(), safe_footstep_util::compare_eigen3f);
-      std::set_intersection(v1.begin(), v1.end(), v2.begin(), v2.end(), inserter(inter_v, inter_v.end()), safe_footstep_util::compare_eigen3f);
-      if (inter_v.size() == 2) { // adjacent mesh
-        std::vector<Eigen::Vector3f> tmp_vs(v1), target_v, tmp_convex;
-        std::set_difference(v2.begin(), v2.end(), v1.begin(), v1.end(), inserter(target_v, target_v.end()), safe_footstep_util::compare_eigen3f);
-        std::copy(target_v.begin(), target_v.end(), std::back_inserter(tmp_vs));
-        safe_footstep_util::calc_convex_hull(tmp_vs, tmp_convex);
-        if (tmp_vs.size() == tmp_convex.size()) {
-          meshes[i] = tmp_convex;
-          meshes[j] = tmp_convex;
-          is_combined[j] = true;
-          is_combined_indices.push_back(j);
-        }
-      }
-    }
-    if (!is_combined[i]) {
-      combined_meshes.push_back(meshes[i]);
-      combined_indices.push_back(is_combined_indices);
-    } else if (is_combined_indices.size() > 1) {
-      for (size_t j = 0; j < combined_indices.size(); j++) {
-        if (std::find(combined_indices[j].begin(), combined_indices[j].end(), i) != combined_indices[j].end()) {
-          combined_meshes[j] = meshes[i];
-          combined_indices[j] = is_combined_indices;
-        }
-      }
-    }
-    is_combined[i] = true;
-  }
-
-  // // add near mesh
-  // tf::StampedTransform transform;
-  // listener_.lookupTransform("/map", "/rleg_end_coords", ros::Time(0), transform); // map relative to rleg
-  // Eigen::Vector3f rfoot_pos;
-  // safe_footstep_util::vectorTFToEigen(transform.getOrigin(), rfoot_pos);
-  // std::vector<Eigen::Vector3f> near_mesh(4);
-  // near_mesh[0] = Eigen::Vector3f(rfoot_pos(0)-0.15, rfoot_pos(1)-0.25, 0);
-  // near_mesh[1] = Eigen::Vector3f(rfoot_pos(0)+0.15, rfoot_pos(1)-0.25, 0);
-  // near_mesh[2] = Eigen::Vector3f(rfoot_pos(0)+0.15, rfoot_pos(1)+0.45, 0);
-  // near_mesh[3] = Eigen::Vector3f(rfoot_pos(0)-0.15, rfoot_pos(1)+0.45, 0);
-  // combined_meshes.push_back(near_mesh);
-
-  // convert to safe_footstep_planner::PolygonArray
-  size_t combined_mesh_num(combined_meshes.size());
-  // std::cerr << "combined_mesh_num : " << combined_mesh_num << std::endl;
-  combined_meshes_.polygons.resize(combined_mesh_num);
-  for (size_t i = 0; i < combined_mesh_num; i++) {
-    size_t vs_num(combined_meshes[i].size());
-    combined_meshes_.polygons[i].points.resize(vs_num);
-    for (size_t j = 0; j < vs_num; j++) {
-      safe_footstep_util::eigenToPoints(combined_meshes[i][j], combined_meshes_.polygons[i].points[j]);
-    }
-  }
-
-  combined_mesh_publisher_.publish(combined_meshes_);
 }
 
 int main(int argc, char **argv)

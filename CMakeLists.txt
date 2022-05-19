@@ -70,6 +70,9 @@ target_link_libraries(steppable_region_publisher ${catkin_LIBRARIES} ${PCL_LIBRA
 add_executable(accumulated_steppable_region_publisher src/accumulated_steppable_region_publisher.cpp src/polypartition.cpp)
 target_link_libraries(accumulated_steppable_region_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 
+add_executable(odom_publisher src/odom_publisher.cpp)
+target_link_libraries(odom_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
+
 add_executable(draw_contours src/draw_contours.cpp)
 target_link_libraries(draw_contours ${catkin_LIBRARIES})
 
