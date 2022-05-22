@@ -73,6 +73,9 @@ target_link_libraries(accumulated_steppable_region_publisher ${catkin_LIBRARIES}
 add_executable(odom_publisher src/odom_publisher.cpp)
 target_link_libraries(odom_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 
+add_executable(leg_base_odom_publisher src/leg_base_odom_publisher.cpp)
+target_link_libraries(leg_base_odom_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
+
 add_executable(draw_contours src/draw_contours.cpp)
 target_link_libraries(draw_contours ${catkin_LIBRARIES})
 
