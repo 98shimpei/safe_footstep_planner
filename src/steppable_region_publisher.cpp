@@ -69,8 +69,8 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   image_publisher_ = nh_.advertise<sensor_msgs::Image> ("output", 1);
   polygon_publisher_ = nh_.advertise<jsk_recognition_msgs::PolygonArray> ("output_polygon", 1);
   target_sub_ = nh_.subscribe("landing_target", 1, &SteppableRegionPublisher::targetCallback, this);
-  //pointcloud_sub_ = nh_.subscribe("rt_accumulated_heightmap_pointcloud_odomrelative/output", 1, &SteppableRegionPublisher::pointcloudCallback, this);
-  pointcloud_sub_ = nh_.subscribe("rt_current_heightmap_pointcloud/output", 1, &SteppableRegionPublisher::pointcloudCallback, this);
+  pointcloud_sub_ = nh_.subscribe("rt_accumulated_heightmap_pointcloud_odomrelative/output", 1, &SteppableRegionPublisher::pointcloudCallback, this);
+  //pointcloud_sub_ = nh_.subscribe("rt_current_heightmap_pointcloud/output", 1, &SteppableRegionPublisher::pointcloudCallback, this);
   median_image_ = cv::Mat::zeros(500, 500, CV_32FC3);
   median_image2_ = cv::Mat::zeros(500, 500, CV_32FC3);
   x_x_diff = 0;
