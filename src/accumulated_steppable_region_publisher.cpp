@@ -51,6 +51,7 @@ private:
   cv::Mat accumulated_height_image;
   cv::Mat accumulated_pose_image;
   cv::Mat accumulated_yaw_image;
+  cv::Mat trimmed_steppable_image;
   float cur_foot_pos_z;
   float grid_length;
   int steppable_range;
@@ -63,6 +64,9 @@ private:
   int accumulate_length;
   int accumulate_center_x;
   int accumulate_center_y;
+  int trimmed_length;
+  int trimmed_center_x;
+  int trimmed_center_y;
   std::string fixed_frame;
   Eigen::Affine3f prev_transform;
   int heightmap_minx; //cm
@@ -104,10 +108,14 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   pnh_.getParam("accumulate_length", accumulate_length);
   pnh_.getParam("accumulate_center_x", accumulate_center_x);
   pnh_.getParam("accumulate_center_y", accumulate_center_y);
+  pnh_.getParam("trimmed_length", trimmed_length);
+  pnh_.getParam("trimmed_center_x", trimmed_center_x);
+  pnh_.getParam("trimmed_center_y", trimmed_center_y);
   accumulated_steppable_image = cv::Mat::ones(accumulate_length, accumulate_length, CV_8UC1)*255;
   accumulated_height_image = cv::Mat::zeros(accumulate_length, accumulate_length, CV_32FC1);
   accumulated_pose_image = cv::Mat(accumulate_length, accumulate_length, CV_32FC3, cv::Scalar(0, 0, 1));
   accumulated_yaw_image = cv::Mat::zeros(accumulate_length, accumulate_length, CV_32FC1);
+  trimmed_steppable_image = cv::Mat::ones(trimmed_length, trimmed_length, CV_8UC1)*255;
   pnh_.getParam("fixed_frame", fixed_frame);
   pnh_.getParam("camera_frame", camera_frame);
   pnh_.getParam("fov_h", fov_h);
@@ -381,13 +389,19 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
 
   ros::Time d_time = ros::Time::now();
 
-  //拡大縮小
+  //拡大縮小、トリミング
   cv::Mat eroded_image;
-
+  trimmed_steppable_image = accumulated_steppable_image(cv::Rect(accumulate_center_x - trimmed_center_x, accumulate_center_y - trimmed_center_y, trimmed_length, trimmed_length)).clone();
+  
   cv::morphologyEx(accumulated_steppable_image, eroded_image, CV_MOP_CLOSE, cv::noArray(), cv::Point(-1, -1), 2);
   cv::morphologyEx(eroded_image, eroded_image, CV_MOP_OPEN,  cv::noArray(), cv::Point(-1, -1), 1);
   cv::erode(eroded_image, eroded_image, cv::noArray(), cv::Point(-1, -1), erode_range);//3
   cv::morphologyEx(eroded_image, eroded_image, CV_MOP_OPEN, cv::noArray(), cv::Point(-1, -1), 1);
+
+  cv::morphologyEx(trimmed_steppable_image, trimmed_steppable_image, CV_MOP_CLOSE, cv::noArray(), cv::Point(-1, -1), 2);
+  cv::morphologyEx(trimmed_steppable_image, trimmed_steppable_image, CV_MOP_OPEN,  cv::noArray(), cv::Point(-1, -1), 1);
+  cv::erode(trimmed_steppable_image, trimmed_steppable_image, cv::noArray(), cv::Point(-1, -1), erode_range);//3
+  cv::morphologyEx(trimmed_steppable_image, trimmed_steppable_image, CV_MOP_OPEN, cv::noArray(), cv::Point(-1, -1), 1);
 
 
   //輪郭抽出
@@ -395,7 +409,7 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   std::list<TPPLPoly> polys, result;
   std::vector<std::vector<cv::Point>> contours;
   std::vector<cv::Vec4i> hierarchy;
-  cv::findContours(eroded_image, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_NONE);
+  cv::findContours(trimmed_steppable_image, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_NONE);
 
   int size_threshold = 5;
   for (int j = 0; j < contours.size(); j++) {
@@ -451,7 +465,7 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
     geometry_msgs::PolygonStamped ps;
     for (int j = iter->GetNumPoints() - 1; j >= 0; j--) {//逆順
       //反転していたy座標をもとに戻す
-      Eigen::Vector3f tmp = Eigen::Vector3f((iter->GetPoint(j).x - accumulate_center_x)*0.01, (-iter->GetPoint(j).y-accumulate_center_y) * 0.01, (accumulated_height_image.at<float>(-iter->GetPoint(j).y, iter->GetPoint(j).x) < -1e+10) ? 0 : accumulated_height_image.at<float>(-iter->GetPoint(j).y, iter->GetPoint(j).x));
+      Eigen::Vector3f tmp = Eigen::Vector3f((iter->GetPoint(j).x - trimmed_center_x)*0.01, (-iter->GetPoint(j).y-trimmed_center_y) * 0.01, (accumulated_height_image.at<float>(-iter->GetPoint(j).y + accumulate_center_y - trimmed_center_y, iter->GetPoint(j).x + accumulate_center_x - trimmed_center_x) < -1e+10) ? 0 : accumulated_height_image.at<float>(-iter->GetPoint(j).y + accumulate_center_y - trimmed_center_y, iter->GetPoint(j).x + accumulate_center_x - trimmed_center_x));
       tmp = center_transform * tmp;
       geometry_msgs::Point32 p;
       p.x = tmp[0];
