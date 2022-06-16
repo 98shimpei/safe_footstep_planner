@@ -653,7 +653,7 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
   double py = msg->y;
   double pz = msg->z;
   std::string target_frame;
-  if (msg->l_r) {
+  if (msg->l_r%2 == 1) {
     target_frame = "/lleg_end_coords";
   }
   else {
@@ -706,6 +706,10 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
   }
 
   region_publisher_.publish(sr);
+
+  if (msg->l_r >= 2) {
+    return;
+  }
 
   Eigen::Vector3f cur_tmp = (center_transform * Eigen::Translation<float, 3>(-accumulate_center_x*0.01, -accumulate_center_y*0.01, 0)).inverse() * cur_foot_pos;
   Eigen::Vector3f next_tmp = (center_transform * Eigen::Translation<float, 3>(-accumulate_center_x*0.01, -accumulate_center_y*0.01, 0)).inverse() * next_foot_pos;
