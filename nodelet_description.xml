@@ -1,0 +1,29 @@
+<library path="lib/libsafe_footstep_planner">
+  <class name="safe_footstep_planner/plugin_nodelet_talker"
+     type="safe_footstep_planner::plugin_nodelet_talker"
+     base_class_type="nodelet::Nodelet">
+    <description>
+    </description>
+  </class>
+
+  <class name="safe_footstep_planner/plugin_nodelet_listener"
+     type="safe_footstep_planner::plugin_nodelet_listener"
+     base_class_type="nodelet::Nodelet">
+    <description>
+    </description>
+  </class>
+
+  <class name="safe_footstep_planner/accumulated_steppable_region_publisher_nodelet"
+     type="safe_footstep_planner::SteppableRegionPublisherNodelet"
+     base_class_type="nodelet::Nodelet">
+    <description>
+    </description>
+  </class>
+
+  <class name="safe_footstep_planner/target_height_publisher_nodelet"
+     type="safe_footstep_planner::TargetHeightPublisherNodelet"
+     base_class_type="nodelet::Nodelet">
+    <description>
+    </description>
+  </class>
+</library>

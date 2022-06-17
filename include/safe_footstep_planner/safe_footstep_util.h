@@ -1,3 +1,4 @@
+#pragma once
 #ifndef SAFE_UTIL_H
 #define SAFE_UTIL_H
 

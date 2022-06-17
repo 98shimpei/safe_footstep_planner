@@ -19,6 +19,8 @@ find_package(catkin REQUIRED COMPONENTS
   roseus
   pcl_ros
   jsk_recognition_utils
+  pluginlib
+  nodelet
 )
 
 find_package(OpenCV REQUIRED)
@@ -55,6 +57,12 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
 )
 
+add_library(${PROJECT_NAME}
+  src/accumulated_steppable_region_publisher_nodelet.cpp    # この行を追加
+  src/target_height_publisher_nodelet.cpp    # この行を追加
+  src/polypartition.cpp
+)
+
 # add_executable(mask_image src/mask_image.cpp)
 # target_link_libraries(mask_image ${catkin_LIBRARIES})
 add_executable(rect_publisher src/rect_publisher.cpp)
@@ -69,6 +77,8 @@ target_link_libraries(steppable_region_publisher ${catkin_LIBRARIES} ${PCL_LIBRA
 
 add_executable(accumulated_steppable_region_publisher src/accumulated_steppable_region_publisher.cpp src/polypartition.cpp)
 target_link_libraries(accumulated_steppable_region_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
+
+target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 
 add_executable(odom_publisher src/odom_publisher.cpp)
 target_link_libraries(odom_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
