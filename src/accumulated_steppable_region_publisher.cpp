@@ -93,8 +93,8 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   height_publisher_ = nh_.advertise<safe_footstep_planner::OnlineFootStep>("landing_height", 1);
   landing_pose_publisher_ = nh_.advertise<visualization_msgs::Marker>("landing_pose_marker", 1);
   target_sub_ = nh_.subscribe("landing_target", 1, &SteppableRegionPublisher::targetCallback, this);
-  heightmap_sub_ = nh_.subscribe("rt_current_heightmap/output", 1, &SteppableRegionPublisher::heightmapCallback, this);
-  heightmap_config_sub_ = nh_.subscribe("rt_current_heightmap/output/config", 1, &SteppableRegionPublisher::heightmapConfigCallback, this);
+  heightmap_sub_ = nh_.subscribe("rt_filtered_current_heightmap/output", 1, &SteppableRegionPublisher::heightmapCallback, this);
+  heightmap_config_sub_ = nh_.subscribe("rt_filtered_current_heightmap/output/config", 1, &SteppableRegionPublisher::heightmapConfigCallback, this);
   median_image_ = cv::Mat::zeros(500, 300, CV_32FC1);
   cur_foot_pos_z = 0;
   pnh_.getParam("grid_length", grid_length);
@@ -111,7 +111,8 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   pnh_.getParam("trimmed_length", trimmed_length);
   pnh_.getParam("trimmed_center_x", trimmed_center_x);
   pnh_.getParam("trimmed_center_y", trimmed_center_y);
-  accumulated_steppable_image = cv::Mat::ones(accumulate_length, accumulate_length, CV_8UC1)*255;
+  accumulated_steppable_image = cv::Mat::zeros(accumulate_length, accumulate_length, CV_8UC1);
+  cv::rectangle(accumulated_steppable_image, cv::Point(accumulate_center_x - 150, accumulate_center_y - 150), cv::Point(accumulate_center_x + 150, accumulate_center_y + 150), cv::Scalar(255), -1);
   accumulated_height_image = cv::Mat::zeros(accumulate_length, accumulate_length, CV_32FC1);
   accumulated_pose_image = cv::Mat(accumulate_length, accumulate_length, CV_32FC3, cv::Scalar(0, 0, 1));
   accumulated_yaw_image = cv::Mat::zeros(accumulate_length, accumulate_length, CV_32FC1);
@@ -159,6 +160,13 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   cv_bridge::CvImagePtr cv_ptr;
   cv::Mat input_image = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_32FC2)->image;  
   cv::medianBlur(input_image, median_image_, 5);
+  cv::Mat update_pixel;
+  std::vector<cv::Mat> tmp_image_vector;
+  cv::split(median_image_, tmp_image_vector);
+  cv::threshold(tmp_image_vector[0], update_pixel, -1e5, 255, cv::THRESH_BINARY);
+  update_pixel.convertTo(update_pixel, CV_8UC1);
+  cv::rectangle(update_pixel, cv::Point(0, 0), cv::Point(update_pixel.cols-1, update_pixel.rows-1), cv::Scalar(0), 1);
+  cv::erode(update_pixel, update_pixel, cv::noArray(), cv::Point(-1, -1), (int)(obstacle_range / grid_length));
   cv::Mat current_height_image = cv::Mat::zeros(median_image_.rows, median_image_.cols, CV_32FC1);
   cv::medianBlur(median_image_, current_height_image, 5);
 
@@ -354,7 +362,7 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
        tmp_trans(1,0), tmp_trans(1,1), tmp_trans(1,3)*100;
   cv::Mat tmp_trans_cv;
   cv::eigen2cv(m, tmp_trans_cv);
-  cv::warpAffine(accumulated_steppable_image, accumulated_steppable_image, tmp_trans_cv, accumulated_steppable_image.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(255));
+  cv::warpAffine(accumulated_steppable_image, accumulated_steppable_image, tmp_trans_cv, accumulated_steppable_image.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
   cv::warpAffine(accumulated_height_image, accumulated_height_image, tmp_trans_cv, accumulated_height_image.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
   cv::warpAffine(accumulated_pose_image, accumulated_pose_image, tmp_trans_cv, accumulated_pose_image.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 1));
   cv::warpAffine(accumulated_yaw_image, accumulated_yaw_image, tmp_trans_cv, accumulated_yaw_image.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
@@ -370,18 +378,33 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
 
   Eigen::Vector3f tmp_vec = center_transform.rotation() * Eigen::Vector3f::UnitX();
   float tmp_yaw = std::atan2(tmp_vec[1], tmp_vec[0]);
-  for (int x = std::max(0, (int)(ea[0])); x < std::min((int)(ec[0]), binarized_image.cols); x++) {
-    for (int y = std::max(0, (int)(ea[1] + (eb[1]-ea[1])*(x-ea[0])/(eb[0]-ea[0]))); y < std::min((int)(ed[1] + (ec[1]-ed[1])*(x-ed[0])/(ec[0]-ed[0])), binarized_image.rows); y++) {
-      accumulated_steppable_image.at<uchar>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = binarized_image.at<uchar>(y, x);
-      if (current_height_image.at<cv::Vec2f>(y, x)[0] > -1e+10) {
-        accumulated_height_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = current_height_image.at<cv::Vec2f>(y, x)[0];
+  //for (int x = std::max(0, (int)(ea[0])); x < std::min((int)(ec[0]), binarized_image.cols); x++) {
+  //  for (int y = std::max(0, (int)(ea[1] + (eb[1]-ea[1])*(x-ea[0])/(eb[0]-ea[0]))); y < std::min((int)(ed[1] + (ec[1]-ed[1])*(x-ed[0])/(ec[0]-ed[0])), binarized_image.rows); y++) {
+  //    accumulated_steppable_image.at<uchar>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = binarized_image.at<uchar>(y, x);
+  //    if (current_height_image.at<cv::Vec2f>(y, x)[0] > -1e+10) {
+  //      accumulated_height_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = current_height_image.at<cv::Vec2f>(y, x)[0];
+  //    }
+  //    if (current_pose_image.at<cv::Vec3f>(y, x)[0] > -1e+10) {
+  //      accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[0] = current_pose_image.at<cv::Vec3f>(y, x)[0];
+  //      accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[1] = current_pose_image.at<cv::Vec3f>(y, x)[1];
+  //      accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[2] = current_pose_image.at<cv::Vec3f>(y, x)[2];
+  //    }
+  //    accumulated_yaw_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = tmp_yaw; //yaw
+  //  }
+  //}
+  for (int x = 0; x < binarized_image.cols; x++) {
+    for (int y = 0; y < binarized_image.rows; y++) {
+      if (update_pixel.at<uchar>(y, x) > 1) {
+        accumulated_steppable_image.at<uchar>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = binarized_image.at<uchar>(y, x);
+        if (current_height_image.at<cv::Vec2f>(y, x)[0] > -1e+10) {
+          accumulated_height_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = current_height_image.at<cv::Vec2f>(y, x)[0];
+        }
+        if (current_pose_image.at<cv::Vec3f>(y, x)[0] > -1e+10) {
+          accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[0] = current_pose_image.at<cv::Vec3f>(y, x)[0];
+          accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[1] = current_pose_image.at<cv::Vec3f>(y, x)[1];
+          accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[2] = current_pose_image.at<cv::Vec3f>(y, x)[2];
+        }
       }
-      if (current_pose_image.at<cv::Vec3f>(y, x)[0] > -1e+10) {
-        accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[0] = current_pose_image.at<cv::Vec3f>(y, x)[0];
-        accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[1] = current_pose_image.at<cv::Vec3f>(y, x)[1];
-        accumulated_pose_image.at<cv::Vec3f>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x)[2] = current_pose_image.at<cv::Vec3f>(y, x)[2];
-      }
-      accumulated_yaw_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = tmp_yaw; //yaw
     }
   }
 
