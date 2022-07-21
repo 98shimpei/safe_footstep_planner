@@ -36,6 +36,7 @@ private:
   ros::Publisher visualized_region_publisher_;
   ros::Publisher combined_mesh_publisher_;
   ros::Publisher steppable_image_publisher_;
+  ros::Publisher current_steppable_image_publisher_;
   ros::Publisher height_image_publisher_;
   ros::Publisher pose_image_publisher_;
   ros::Publisher polygon_publisher_;
@@ -52,6 +53,7 @@ private:
   cv::Mat accumulated_pose_image;
   cv::Mat accumulated_yaw_image;
   cv::Mat trimmed_steppable_image;
+  cv::Mat current_steppable_map_for_visualize;
   float cur_foot_pos_z;
   float grid_length;
   int steppable_range;
@@ -87,6 +89,7 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   visualized_region_publisher_ = nh_.advertise<jsk_recognition_msgs::PolygonArray>("visualized_steppable_region", 1);
   combined_mesh_publisher_ = nh_.advertise<safe_footstep_planner::PolygonArray>("combined_meshed_polygons", 1);
   steppable_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("steppable_image_output", 1);
+  current_steppable_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("current_steppable_image_output", 1);
   height_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("height_image_output", 1);
   pose_image_publisher_ = nh_.advertise<sensor_msgs::Image> ("pose_image_output", 1);
   polygon_publisher_ = nh_.advertise<jsk_recognition_msgs::PolygonArray> ("output_polygon", 1);
@@ -191,6 +194,8 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
 
   ros::Time a_time = ros::Time::now();
 
+  current_steppable_map_for_visualize = cv::Mat::zeros(median_image_.rows, median_image_.cols, CV_8UC3);
+
   for (int x = (int)(obstacle_edge_range); x < (median_image_.cols-(int)(obstacle_edge_range)); x++) {
     for (int y = (int)(obstacle_edge_range); y < (median_image_.rows-(int)(obstacle_edge_range)); y++) {
       //if (std::abs(median_image_.at<cv::Vec2f>(y, x)[0] - cur_foot_pos_z) > height_limit) {
@@ -252,6 +257,8 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
         continue;
       }
 
+      current_steppable_map_for_visualize.at<cv::Vec3b>(y, x)[0] = 100;
+
       //image.at<cv::Vec3b>(y, x)[0] = 100;
       //image.at<cv::Vec3b>(y, x)[1] = 100;
       //image.at<cv::Vec3b>(y, x)[2] = 100;
@@ -268,6 +275,7 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
         continue;
       }
       binarized_image.at<uchar>(y, x) = 255;
+      current_steppable_map_for_visualize.at<cv::Vec3b>(y, x)[0] = 255;
       //image.at<cv::Vec3b>(y, x)[0] = 200;
       //image.at<cv::Vec3b>(y, x)[1] = 200;
       //image.at<cv::Vec3b>(y, x)[2] = 200;
@@ -395,6 +403,8 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
   for (int x = 0; x < binarized_image.cols; x++) {
     for (int y = 0; y < binarized_image.rows; y++) {
       if (update_pixel.at<uchar>(y, x) > 1) {
+        current_steppable_map_for_visualize.at<cv::Vec3b>(y, x)[1] = 255;
+
         accumulated_steppable_image.at<uchar>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = binarized_image.at<uchar>(y, x);
         if (current_height_image.at<cv::Vec2f>(y, x)[0] > -1e+10) {
           accumulated_height_image.at<float>(y+heightmap_miny+accumulate_center_y, x+heightmap_minx+accumulate_center_x) = current_height_image.at<cv::Vec2f>(y, x)[0];
@@ -505,15 +515,16 @@ void SteppableRegionPublisher::heightmapCallback(const sensor_msgs::ImageConstPt
 
   polygon_publisher_.publish(polygon_msg);
 
-  cv::line(eroded_image, cv::Point(ea[0]+accumulate_center_x+heightmap_minx, ea[1]+accumulate_center_y+heightmap_miny), cv::Point(eb[0]+accumulate_center_x+heightmap_minx, eb[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
-  cv::line(eroded_image, cv::Point(eb[0]+accumulate_center_x+heightmap_minx, eb[1]+accumulate_center_y+heightmap_miny), cv::Point(ec[0]+accumulate_center_x+heightmap_minx, ec[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
-  cv::line(eroded_image, cv::Point(ec[0]+accumulate_center_x+heightmap_minx, ec[1]+accumulate_center_y+heightmap_miny), cv::Point(ed[0]+accumulate_center_x+heightmap_minx, ed[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
-  cv::line(eroded_image, cv::Point(ed[0]+accumulate_center_x+heightmap_minx, ed[1]+accumulate_center_y+heightmap_miny), cv::Point(ea[0]+accumulate_center_x+heightmap_minx, ea[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
+  //cv::line(eroded_image, cv::Point(ea[0]+accumulate_center_x+heightmap_minx, ea[1]+accumulate_center_y+heightmap_miny), cv::Point(eb[0]+accumulate_center_x+heightmap_minx, eb[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
+  //cv::line(eroded_image, cv::Point(eb[0]+accumulate_center_x+heightmap_minx, eb[1]+accumulate_center_y+heightmap_miny), cv::Point(ec[0]+accumulate_center_x+heightmap_minx, ec[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
+  //cv::line(eroded_image, cv::Point(ec[0]+accumulate_center_x+heightmap_minx, ec[1]+accumulate_center_y+heightmap_miny), cv::Point(ed[0]+accumulate_center_x+heightmap_minx, ed[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
+  //cv::line(eroded_image, cv::Point(ed[0]+accumulate_center_x+heightmap_minx, ed[1]+accumulate_center_y+heightmap_miny), cv::Point(ea[0]+accumulate_center_x+heightmap_minx, ea[1]+accumulate_center_y+heightmap_miny), cv::Scalar(180), 3);
 
   cv::flip(eroded_image, eroded_image, 0);
   //cv::flip(image, image, 0);
   //image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", image).toImageMsg());
   steppable_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "mono8", eroded_image).toImageMsg());
+  current_steppable_image_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", current_steppable_map_for_visualize).toImageMsg());
 
   cv::Mat output_height_image = cv::Mat::zeros(accumulated_height_image.cols, accumulated_height_image.rows, CV_8UC3);
   cv::Mat output_pose_image = cv::Mat::zeros(accumulated_height_image.cols, accumulated_height_image.rows, CV_8UC3);
