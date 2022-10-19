@@ -59,6 +59,7 @@ private:
   float obstacle_height;
   float height_limit;
   int erode_range;
+  std::string map_frame;
 };
 
 SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
@@ -86,6 +87,7 @@ SteppableRegionPublisher::SteppableRegionPublisher() : nh_(""), pnh_("~")
   pnh_.getParam("obstacle_height", obstacle_height);
   pnh_.getParam("height_limit", height_limit);
   pnh_.getParam("erode_range", erode_range);
+  map_frame = "odom_ground";
 }
 
 void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::OnlineFootStep::ConstPtr& msg)
@@ -102,8 +104,8 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
 
   tf::StampedTransform transform;
   // listener_.lookupTransform("/body_on_odom", target_frame, ros::Time(0), transform); // map relative to target_frame
-  listener_.waitForTransform("/odom_ground", target_frame, msg->header.stamp, ros::Duration(3.0));
-  listener_.lookupTransform("/odom_ground", target_frame, msg->header.stamp, transform); // map relative to target_frame
+  listener_.waitForTransform(map_frame, target_frame, msg->header.stamp, ros::Duration(3.0));
+  listener_.lookupTransform(map_frame, target_frame, msg->header.stamp, transform); // map relative to target_frame
   // listener_.lookupTransform(combined_meshes_.header.frame_id, target_frame, ros::Time(0), transform); // map relative to target_frame
   Eigen::Vector3f cur_foot_pos, ez(Eigen::Vector3f::UnitZ());
   safe_footstep_util::vectorTFToEigen(transform.getOrigin(), cur_foot_pos);
@@ -155,6 +157,7 @@ void SteppableRegionPublisher::targetCallback(const safe_footstep_planner::Onlin
 
 void SteppableRegionPublisher::pointcloudCallback(const sensor_msgs::PointCloud2ConstPtr& input)
 {
+  map_frame = input->header.frame_id;
 
   ros::Time begin_time = ros::Time::now();
   // Convert the sensor_msgs/PointCloud2 data to pcl/PointCloud
